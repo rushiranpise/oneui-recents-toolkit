@@ -2,6 +2,9 @@
 
 LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop**, **Restart** and **Screenshot** to the per-task popup menu in Recents, directly below **App info**.
 
+<img width="459" height="1021" alt="image" src="https://github.com/user-attachments/assets/9667c30a-1f89-49f9-b024-9e7b71538155" />
+
+
 - **Force stop** closes the menu and force-stops that one app (the tapped task only). Its Recents card is deliberately left in place - only the process is stopped, so the carousel never has to re-layout behind the menu and cannot get stuck.
 - **Restart** force-stops the same app and then starts it again, so it comes back cold in the foreground.
 - **Screenshot** saves a picture of the app itself into `Pictures/Screenshots`. It is the task's own snapshot, not the current screen, so the recents UI and the menu are never in it.
