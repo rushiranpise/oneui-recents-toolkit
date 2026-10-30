@@ -1,4 +1,4 @@
-package io.github.ndevlabs.fkf;
+package io.github.rushiranpise.recentstoolkit;
 
 import android.app.Activity;
 import android.app.ActivityManager;
@@ -43,7 +43,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
 
-    private static final String TAG = "ForceKillFocused";
+    private static final String TAG = "RecentsToolkit";
     private static final String TITLE = "Force stop";
     private static final String MARKER = "forcestop_item";
     private static final String RESTART_TITLE = "Restart";

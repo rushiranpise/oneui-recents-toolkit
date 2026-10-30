@@ -1,6 +1,6 @@
-# ForceKill Focused
+# Recents Toolkit
 
-LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop** and **Restart** items to the per-task popup menu in Recents, directly below **App info**.
+LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop**, **Restart** and **Screenshot** to the per-task popup menu in Recents, directly below **App info**.
 
 - **Force stop** closes the menu and force-stops that one app (the tapped task only). Its Recents card is deliberately left in place - only the process is stopped, so the carousel never has to re-layout behind the menu and cannot get stuck.
 - **Restart** force-stops the same app and then starts it again, so it comes back cold in the foreground.
@@ -8,7 +8,7 @@ LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop** and **Rest
 
 ## Requirements
 
-- Samsung device on OneUI 8.5
+- Samsung device on OneUI 8.5 or OneUI 9
 - Root via one of:
   - Magisk + Zygisk + LSPosed
   - KernelSU + ZygiskNext + LSPosed
@@ -17,11 +17,15 @@ There are no separate Magisk/KernelSU builds. It's a plain LSPosed APK hooking `
 
 ## Install
 
-1. Download the APK from [Releases](https://github.com/1ndevelopment/lsp-forcekill-focused/releases) and install it.
-2. In LSPosed Manager, go to **Modules** and enable **ForceKill Focused**.
+1. Download the APK from this repository's [Releases](../../releases) and install it.
+2. In LSPosed Manager, go to **Modules** and enable **Recents Toolkit**.
 3. Set the scope to `com.android.systemui` and `com.sec.android.app.launcher`.
 4. Reboot, or restart SystemUI.
 5. Open Recents, tap a task's icon, then tap **Force stop**, **Restart** or **Screenshot**.
+
+## Credits
+
+The original work this module grew out of is **ForceKill Focused** by the **1ndevelopment** team ([1ndevelopment/lsp-forcekill-focused](https://github.com/1ndevelopment/lsp-forcekill-focused)): the task-menu injection, the `LayoutInflater` hook, the card and target resolution, and the stop sequence all began there and are still the shape of the code here. This repository is that work, unmaintained upstream and carried forward for OneUI 9 on the developer's own device, with the anchor row, the kept Recents card, the Restart row and the Screenshot row added on top. Thank you to 1ndevelopment for the foundation.
 
 ## How it works
 

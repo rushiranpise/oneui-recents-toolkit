@@ -3,14 +3,14 @@ def localProps = new Properties()
 def localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) localPropsFile.withInputStream { localProps.load(it) }
 android {
-    namespace = "io.github.ndevlabs.fkf"
+    namespace = "io.github.rushiranpise.recentstoolkit"
     compileSdk = 34
     defaultConfig {
-        applicationId = "io.github.ndevlabs.fkf"
+        applicationId = "io.github.rushiranpise.recentstoolkit"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "2.0"
     }
     signingConfigs {
         release {
