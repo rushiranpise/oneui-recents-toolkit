@@ -1,13 +1,27 @@
 package io.github.ndevlabs.fkf;
 
+import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ComponentName;
+import android.content.ContextWrapper;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.net.Uri;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
+import android.widget.ImageView;
+import android.widget.Toast;
+
+import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.Window;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.widget.PopupWindow;
@@ -34,9 +48,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String MARKER = "forcestop_item";
     private static final String RESTART_TITLE = "Restart";
     private static final String RESTART_MARKER = "restart_item";
+    private static final String SHOT_TITLE = "Screenshot";
+    private static final String SHOT_MARKER = "screenshot_item";
 
     /** Tags that belong to this module's own rows, which must never be read as a package name. */
-    private static final Set<String> MARKERS = Set.of(MARKER, RESTART_MARKER);
+    private static final Set<String> MARKERS = Set.of(MARKER, RESTART_MARKER, SHOT_MARKER);
 
     // OneUI's task menu is a custom DataBinding view (task_menu_layout with
     // task_menu_item_layout rows), NOT a framework PopupMenu. Verified on-device.
@@ -63,6 +79,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int sItemLayoutId = -1; // -1 = unresolved, 0 = absent
     private static volatile String sMenuTaskPkg;
     private static volatile long sMenuTaskTime;
+    private static volatile WeakReference<View> sMenuTaskCard;
     private static volatile int sMenuTaskId = -1;
     private static final ArrayList<Object> sMenuHosts = new ArrayList<>(); // PopupWindow|Dialog
     private static volatile Class<?> sTaskViewClass;
@@ -92,6 +109,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (pkg instanceof String && !SKIP.contains(pkg)) {
                             sMenuTaskPkg = (String) pkg;
                             sMenuTaskTime = System.currentTimeMillis();
+                            sMenuTaskCard = new WeakReference<>(card);
                             try {
                                 Object tid = XposedHelpers.callMethod(card, "getFirstTaskId");
                                 sMenuTaskId = tid instanceof Number ? ((Number) tid).intValue() : -1;
@@ -158,7 +176,9 @@ public class MainHook implements IXposedHookLoadPackage {
             ViewParent pp = row.getParent();
             if (!(pp instanceof ViewGroup)) return;
             ViewGroup parent = (ViewGroup) pp;
-            if (hasRow(parent, MARKER) && hasRow(parent, RESTART_MARKER)) return; // done already
+            if (hasRow(parent, MARKER) && hasRow(parent, RESTART_MARKER) && hasRow(parent, SHOT_MARKER)) {
+                return; // done already
+            }
             Context ctx = parent.getContext();
             int anchorIndex = indexOfAnchor(parent, anchorTitle(ctx, processPkg));
             if (anchorIndex < 0) {
@@ -176,8 +196,14 @@ public class MainHook implements IXposedHookLoadPackage {
                 parent.addView(
                         menuRow(ctx, parent, RESTART_TITLE, RESTART_MARKER, MainHook::onRestart),
                         anchorIndex + 1);
+                anchorIndex++;
             }
-            XposedBridge.log(TAG + ": Force stop and Restart inserted below App info");
+            if (!hasRow(parent, SHOT_MARKER)) {
+                parent.addView(
+                        menuRow(ctx, parent, SHOT_TITLE, SHOT_MARKER, MainHook::onScreenshot),
+                        anchorIndex + 1);
+            }
+            XposedBridge.log(TAG + ": Force stop, Restart and Screenshot inserted below App info");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": insert failed: " + t);
         }
@@ -232,6 +258,226 @@ public class MainHook implements IXposedHookLoadPackage {
         Context ctx = v.getContext();
         dismissMenuPopup();
         new Thread(() -> restartPkg(ctx, pkg), "Restart").start();
+    }
+
+    /**
+     * Saves a picture of the task itself, the way the Recents screenshot works on Pixel: the card's
+     * own snapshot is drawn, so nothing that is currently on screen (the menu, the carousel) ends
+     * up in it.
+     */
+    private static void onScreenshot(View v) {
+        final Context ctx = v.getContext();
+        final String pkg = menuTarget(v);
+        final View card = sMenuTaskCard != null ? sMenuTaskCard.get() : null;
+        dismissMenuPopup();
+        if (card == null) {
+            XposedBridge.log(TAG + ": screenshot: no card for the menu, nothing captured");
+            return;
+        }
+        // The task's own snapshot is the picture of the app, so it is used before anything that is
+        // on screen: it is the full resolution one, and it has no recents chrome around it.
+        Bitmap snapshot = sceneBitmap(card, pkg);
+        if (snapshot != null) {
+            final Bitmap shot = snapshot;
+            new Thread(() -> saveShot(ctx, shot, pkg), "Screenshot").start();
+            return;
+        }
+        // Fallback: copy the pixels the card has on screen, once the menu is out of the way.
+        mainPostDelayed(() -> pixelCopyCard(ctx, card, pkg), 350);
+    }
+
+    /**
+     * The snapshot the card already holds (`TaskSceneData.thumbnail`), which is the app's own
+     * picture at the size the task was captured. A hardware bitmap is copied out to a software one
+     * so it can be written to a PNG, and the size the task was captured at is logged with it.
+     */
+    private static Bitmap sceneBitmap(View card, String pkg) {
+        try {
+            Object data = sceneData(card);
+            if (data == null) return null;
+            Object thumb = data.getClass().getMethod("getThumbnail").invoke(data);
+            XposedBridge.log(TAG + ": screenshot: thumbnail=" + (thumb == null
+                    ? "null" : thumb.getClass().getName()));
+            if (!(thumb instanceof Bitmap)) return null;
+            Bitmap bitmap = (Bitmap) thumb;
+            if (bitmap.getConfig() == Bitmap.Config.HARDWARE) {
+                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false);
+                if (bitmap == null) {
+                    XposedBridge.log(TAG + ": screenshot: hardware bitmap would not copy");
+                    return null;
+                }
+            }
+            XposedBridge.log(TAG + ": screenshot: task snapshot for " + pkg
+                    + " " + bitmap.getWidth() + "x" + bitmap.getHeight());
+            return bitmap;
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": screenshot: no task snapshot: " + t);
+            return null;
+        }
+    }
+
+    /**
+     * The scene data holding the task's snapshot. It lives on the card's scene view rather than on
+     * the card itself, so both are tried.
+     */
+    private static Object sceneData(View card) {
+        View scene = snapshotView(card);
+        for (Object candidate : new Object[] {scene, card}) {
+            if (candidate == null) continue;
+            try {
+                Object data = candidate.getClass().getMethod("getTaskSceneData").invoke(candidate);
+                // The scene view answers with one entry per task in the scene; a single task card
+                // has one, and a split screen pair has one per app.
+                if (data instanceof List) {
+                    List<?> list = (List<?>) data;
+                    for (Object entry : list) {
+                        if (entry != null) return entry;
+                    }
+                    continue;
+                }
+                if (data != null) return data;
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
+    /**
+     * Copies the card's on-screen pixels, for when the task has no snapshot to hand. The whole
+     * window is copied and then cropped to the card, since PixelCopy only takes a window.
+     */
+    private static void pixelCopyCard(Context ctx, View card, String pkg) {
+        try {
+            final View target = snapshotView(card);
+            if (target == null || target.getWidth() <= 0 || target.getHeight() <= 0) {
+                XposedBridge.log(TAG + ": screenshot: card has nothing to copy");
+                return;
+            }
+            final Window window = windowOf(ctx);
+            if (window == null) {
+                XposedBridge.log(TAG + ": screenshot: no window to copy from");
+                return;
+            }
+            final View root = window.getDecorView();
+            final int width = root.getWidth();
+            final int height = root.getHeight();
+            if (width <= 0 || height <= 0) return;
+            final Bitmap full = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            android.view.PixelCopy.request(window, full, result -> {
+                if (result != android.view.PixelCopy.SUCCESS) {
+                    XposedBridge.log(TAG + ": screenshot: copy failed with " + result);
+                    return;
+                }
+                int[] at = new int[2];
+                target.getLocationInWindow(at);
+                int left = Math.max(0, at[0]);
+                int top = Math.max(0, at[1]);
+                int cropW = Math.min(target.getWidth(), width - left);
+                int cropH = Math.min(target.getHeight(), height - top);
+                if (cropW <= 0 || cropH <= 0) return;
+                final Bitmap shot = Bitmap.createBitmap(full, left, top, cropW, cropH);
+                XposedBridge.log(TAG + ": screenshot: copied " + cropW + "x" + cropH
+                        + " for " + pkg);
+                new Thread(() -> saveShot(ctx, shot, pkg), "Screenshot").start();
+            }, new Handler(Looper.getMainLooper()));
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": screenshot: copy failed: " + t);
+        }
+    }
+
+    /** The window hosting the recents card, so its pixels can be copied. */
+    private static Window windowOf(Context ctx) {
+        Context c = ctx;
+        while (c instanceof ContextWrapper) {
+            if (c instanceof Activity) return ((Activity) c).getWindow();
+            c = ((ContextWrapper) c).getBaseContext();
+        }
+        return null;
+    }
+
+    /** The largest visible child of the card, preferring one that actually draws an image. */
+    private static View snapshotView(View card) {
+        if (!(card instanceof ViewGroup)) return card;
+        ViewGroup group = (ViewGroup) card;
+        View best = null;
+        long bestArea = 0;
+        View bestImage = null;
+        long bestImageArea = 0;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child.getVisibility() != View.VISIBLE) continue;
+            long area = (long) child.getWidth() * child.getHeight();
+            XposedBridge.log(TAG + ": screenshot: child " + describe(child) + " area=" + area);
+            if (area > bestArea) {
+                bestArea = area;
+                best = child;
+            }
+            if (child instanceof ImageView && area > bestImageArea) {
+                bestImageArea = area;
+                bestImage = child;
+            }
+        }
+        // A thumbnail is the picture of the task; a larger plain container only holds it and the
+        // unchanged recents chrome with it.
+        return bestImage != null ? bestImage : best;
+    }
+
+    private static String describe(View view) {
+        String id;
+        try {
+            int resId = view.getId();
+            id = resId == View.NO_ID ? "(no id)"
+                    : view.getResources().getResourceEntryName(resId);
+        } catch (Throwable t) {
+            id = "(id?)";
+        }
+        return view.getClass().getName() + "#" + id;
+    }
+
+    /** Writes the picture into Pictures/Screenshots through MediaStore, so Gallery picks it up. */
+    private static void saveShot(Context ctx, Bitmap bitmap, String pkg) {
+        String name = "Screenshot_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                .format(new java.util.Date()) + ".png";
+        try {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+            values.put(
+                    MediaStore.Images.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/Screenshots");
+            Uri uri = ctx.getContentResolver()
+                    .insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                XposedBridge.log(TAG + ": screenshot: MediaStore refused the entry");
+                return;
+            }
+            try (OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new java.io.IOException("no stream for " + uri);
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            }
+            XposedBridge.log(TAG + ": screenshot saved " + uri + " for " + pkg);
+            mainPost(() -> toast(ctx, "Screenshot saved"));
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": screenshot save failed: " + t);
+            mainPost(() -> toast(ctx, "Screenshot failed"));
+        }
+    }
+
+    private static void mainPost(Runnable r) {
+        mainPostDelayed(r, 0);
+    }
+
+    private static void mainPostDelayed(Runnable r, long delayMs) {
+        try {
+            new Handler(Looper.getMainLooper()).postDelayed(r, delayMs);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void toast(Context ctx, String text) {
+        try {
+            Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": toast failed: " + t);
+        }
     }
 
     private static void restartPkg(Context ctx, String pkg) {
