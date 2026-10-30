@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import android.widget.TextView;
 import android.os.Debug;
 
-import java.lang.ref.WeakReference;
 import java.util.concurrent.TimeUnit;
 import java.util.HashSet;
 import java.util.List;
@@ -28,8 +27,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "ForceKillFocused";
-    private static final String TITLE = "Force kill";
-    private static final String MARKER = "forcekill_item";
+    private static final String TITLE = "Force stop";
+    private static final String MARKER = "forcestop_item";
 
     // OneUI's task menu is a custom DataBinding view (task_menu_layout with
     // task_menu_item_layout rows), NOT a framework PopupMenu. Verified on-device.
@@ -56,9 +55,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int sItemLayoutId = -1; // -1 = unresolved, 0 = absent
     private static volatile String sMenuTaskPkg;
     private static volatile long sMenuTaskTime;
-    private static volatile WeakReference<View> sMenuTaskCard;
     private static volatile int sMenuTaskId = -1;
-    private static volatile boolean sLastRemoved;
     private static final ArrayList<Object> sMenuHosts = new ArrayList<>(); // PopupWindow|Dialog
     private static volatile Class<?> sTaskViewClass;
     private static volatile boolean sTaskViewLookedUp;
@@ -87,7 +84,6 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (pkg instanceof String && !SKIP.contains(pkg)) {
                             sMenuTaskPkg = (String) pkg;
                             sMenuTaskTime = System.currentTimeMillis();
-                            sMenuTaskCard = new WeakReference<>(card);
                             try {
                                 Object tid = XposedHelpers.callMethod(card, "getFirstTaskId");
                                 sMenuTaskId = tid instanceof Number ? ((Number) tid).intValue() : -1;
@@ -104,17 +100,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": TaskIconView hook skipped: " + t);
         }
-
-        // Discovery: log native removals (manual swipe) to confirm the path + task ids.
-        try {
-            Class<?> atm = Class.forName("android.app.ActivityTaskManager");
-            XposedBridge.hookAllMethods(atm, "removeTask", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    XposedBridge.log(TAG + ": ATM.removeTask task=" + param.args[0]);
-                }
-            });
-        } catch (Throwable ignored) {}
 
         // Record popup/dialog hosts so the menu can be dismissed after a tap.
         XC_MethodHook recordHost = new XC_MethodHook() {
@@ -189,44 +174,15 @@ public class MainHook implements IXposedHookLoadPackage {
                     return;
                 }
                 final String target = pkg;
-                final int taskId = System.currentTimeMillis() - sMenuTaskTime < 60000
-                        ? sMenuTaskId : -1;
-                dismissMenuPopup();
-                final View card = sMenuTaskCard != null ? sMenuTaskCard.get() : null;
                 final Context fctx = c;
-                // Kill starts NOW so its latency overlaps the animation instead
-                // of stalling the card at the top afterwards.
-                final long[] freedBox = new long[1];
-                final boolean[] removedBox = new boolean[1];
-                final Thread killThread = new Thread(() -> {
-                    freedBox[0] = forceKillPkg(fctx, target, taskId);
-                    removedBox[0] = sLastRemoved;
-                }, "ForceKill");
-                killThread.start();
-                Runnable finish = () -> {
-                    try {
-                        killThread.join(4000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    cardPost(card, () -> {
-                        // Only snap back if removal failed; a removed row is
-                        // detached by the list itself (its recycled views rebind clean,
-                        // like after a manual swipe).
-                        if (!removedBox[0] && card != null) card.setTranslationY(0f);
-                    });
-                };
-                if (card != null && card.getHeight() > 0) {
-                    // Swipe the card straight up like a manual dismiss.
-                    card.animate().translationY(-card.getHeight())
-                            .setDuration(250).withEndAction(
-                                    () -> new Thread(finish, "ForceKillFin").start()).start();
-                } else {
-                    new Thread(finish, "ForceKillFin").start();
-                }
+                dismissMenuPopup();
+                // The app is stopped in the background so the menu closes straight away. The
+                // recents card is deliberately left alone: the task stays in recents, only its
+                // process is stopped, so the carousel keeps its layout and never gets stuck.
+                new Thread(() -> forceStopPkg(fctx, target), "ForceStop").start();
             });
             parent.addView(fk, anchorIndex + 1);
-            XposedBridge.log(TAG + ": Force Kill inserted below App info");
+            XposedBridge.log(TAG + ": Force stop inserted below App info");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": insert failed: " + t);
         }
@@ -290,18 +246,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable ignored) {}
         return false;
-    }
-
-    private static void cardPost(View card, Runnable r) {
-        try {
-            if (card != null) {
-                card.post(r);
-                return;
-            }
-        } catch (Throwable ignored) {}
-        try {
-            new android.os.Handler(android.os.Looper.getMainLooper()).post(r);
-        } catch (Throwable ignored) {}
     }
 
     /**
@@ -398,8 +342,7 @@ public class MainHook implements IXposedHookLoadPackage {
         return null;
     }
 
-    private static long forceKillPkg(Context ctx, String pkg, int taskId) {
-        // returns freed KB, or -1 when the app survived.
+    private static void forceStopPkg(Context ctx, String pkg) {
         long beforeKb = pssOf(ctx, pkg);
         // 1. hidden forceStopPackage (launcher holds FORCE_STOP_PACKAGES).
         try {
@@ -421,18 +364,13 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             sleep(400);
         }
-        boolean dead = isDead(ctx, pkg);
-        // 3. drop the recents card via ActivityTaskManager (AM.removeTask is
-        // gone on this framework; launcher holds REMOVE_TASKS).
-        boolean removed = removeTaskAtm(ctx, taskId);
-        if (!removed) removed = removeTaskByPkg(ctx, pkg);
-        sLastRemoved = removed;
-        XposedBridge.log(TAG + ": kill pkg=" + pkg + " task=" + taskId
-                + " dead=" + dead + " removed=" + removed + " freedKb=" + beforeKb);
-        return dead ? beforeKb : -1;
+        // The recents card is left in place on purpose: the task keeps its entry, only the
+        // process is stopped, so nothing has to re-layout the carousel behind the menu.
+        XposedBridge.log(TAG + ": force stopped pkg=" + pkg
+                + " dead=" + isDead(ctx, pkg) + " freedKb=" + beforeKb);
     }
 
-    /** Sum of the target's process PSS before the kill. */
+    /** Sum of the target's process PSS before it is stopped. */
     private static long pssOf(Context ctx, String pkg) {
         long total = 0;
         try {
@@ -498,42 +436,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable ignored) {
             return false;
         }
-    }
-
-    private static boolean removeTaskAtm(Context ctx, int taskId) {
-        if (taskId < 0) return false;
-        try {
-            Class<?> atm = Class.forName("android.app.ActivityTaskManager");
-            try {
-                Object inst = atm.getMethod("getInstance", Context.class).invoke(null, ctx);
-                atm.getMethod("removeTask", int.class).invoke(inst, taskId);
-                return true;
-            } catch (Throwable t1) {
-                Object svc = atm.getMethod("getService").invoke(null);
-                svc.getClass().getMethod("removeTask", int.class).invoke(svc, taskId);
-                return true;
-            }
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": ATM.removeTask failed: " + t);
-            return false;
-        }
-    }
-
-    private static boolean removeTaskByPkg(Context ctx, String pkg) {
-        try {
-            ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
-            List<ActivityManager.RecentTaskInfo> recents = am.getRecentTasks(20, 0);
-            if (recents == null) return false;
-            for (ActivityManager.RecentTaskInfo t : recents) {
-                ComponentName c = t.baseIntent != null ? t.baseIntent.getComponent() : null;
-                if (c != null && c.getPackageName().equals(pkg) && removeTaskAtm(ctx, t.id)) {
-                    return true;
-                }
-            }
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": recent-task lookup failed: " + t);
-        }
-        return false;
     }
 
 }

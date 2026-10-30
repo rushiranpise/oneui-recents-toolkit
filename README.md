@@ -1,8 +1,8 @@
 # ForceKill Focused
 
-LSPosed module for **OneUI 8.5 and OneUI 9** that adds a **Force kill** item to the per-task popup menu in Recents, directly below **App info**.
+LSPosed module for **OneUI 8.5 and OneUI 9** that adds a **Force stop** item to the per-task popup menu in Recents, directly below **App info**.
 
-Tapping it swipe-dismisses the task card, closes the menu, force-stops that one app (the tapped task only), and removes its Recents card.
+Tapping it closes the menu and force-stops that one app (the tapped task only). Its Recents card is deliberately left in place - only the process is stopped, so the carousel never has to re-layout behind the menu and cannot get stuck.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ There are no separate Magisk/KernelSU builds. It's a plain LSPosed APK hooking `
 2. In LSPosed Manager, go to **Modules** and enable **ForceKill Focused**.
 3. Set the scope to `com.android.systemui` and `com.sec.android.app.launcher`.
 4. Reboot, or restart SystemUI.
-5. Open Recents, tap a task's icon, then tap **Force kill**.
+5. Open Recents, tap a task's icon, then tap **Force stop**.
 
 ## How it works
 
@@ -32,7 +32,7 @@ Everything lives in one file, `MainHook.java`.
   1. The tapped card's `TaskView.getTaskPackageName()` (exact)
   2. The view-tag chain (`TaskIconView` args)
   3. The top non-system recent task
-- **Kill sequence:** hidden `ActivityManager.forceStopPackage()`, then `killBackgroundProcesses()`, then `removeTask()`. This runs inside the hooked process (SystemUI / launcher), which holds the required permission.
+- **Stop sequence:** hidden `ActivityManager.forceStopPackage()`, with a `su am force-stop` fallback if the app survives. This runs inside the hooked process (SystemUI / launcher), which holds the required permission.
 
 ## Troubleshooting
 
