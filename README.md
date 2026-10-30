@@ -1,9 +1,9 @@
 # ForceKill Focused
 
-LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop** and **Relaunch** items to the per-task popup menu in Recents, directly below **App info**.
+LSPosed module for **OneUI 8.5 and OneUI 9** that adds **Force stop** and **Restart** items to the per-task popup menu in Recents, directly below **App info**.
 
 - **Force stop** closes the menu and force-stops that one app (the tapped task only). Its Recents card is deliberately left in place - only the process is stopped, so the carousel never has to re-layout behind the menu and cannot get stuck.
-- **Relaunch** force-stops the same app and then starts it again, so it comes back cold in the foreground.
+- **Restart** force-stops the same app and then starts it again, so it comes back cold in the foreground.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ There are no separate Magisk/KernelSU builds. It's a plain LSPosed APK hooking `
 2. In LSPosed Manager, go to **Modules** and enable **ForceKill Focused**.
 3. Set the scope to `com.android.systemui` and `com.sec.android.app.launcher`.
 4. Reboot, or restart SystemUI.
-5. Open Recents, tap a task's icon, then tap **Force stop** or **Relaunch**.
+5. Open Recents, tap a task's icon, then tap **Force stop** or **Restart**.
 
 ## How it works
 
@@ -34,7 +34,7 @@ Everything lives in one file, `MainHook.java`.
   2. The view-tag chain (`TaskIconView` args)
   3. The top non-system recent task
 - **Stop sequence:** hidden `ActivityManager.forceStopPackage()`, with a `su am force-stop` fallback if the app survives. This runs inside the hooked process (SystemUI / launcher), which holds the required permission.
-- **Relaunch:** the same stop sequence, then the package's launch intent is started with `FLAG_ACTIVITY_NEW_TASK` on the main thread, so the app comes back as a fresh process.
+- **Restart:** the same stop sequence, then the package's launch intent is started with `FLAG_ACTIVITY_NEW_TASK` on the main thread, so the app comes back as a fresh process.
 
 ## Troubleshooting
 

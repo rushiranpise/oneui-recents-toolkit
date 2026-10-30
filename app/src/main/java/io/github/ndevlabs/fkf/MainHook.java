@@ -32,11 +32,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String TAG = "ForceKillFocused";
     private static final String TITLE = "Force stop";
     private static final String MARKER = "forcestop_item";
-    private static final String RELAUNCH_TITLE = "Relaunch";
-    private static final String RELAUNCH_MARKER = "relaunch_item";
+    private static final String RESTART_TITLE = "Restart";
+    private static final String RESTART_MARKER = "restart_item";
 
     /** Tags that belong to this module's own rows, which must never be read as a package name. */
-    private static final Set<String> MARKERS = Set.of(MARKER, RELAUNCH_MARKER);
+    private static final Set<String> MARKERS = Set.of(MARKER, RESTART_MARKER);
 
     // OneUI's task menu is a custom DataBinding view (task_menu_layout with
     // task_menu_item_layout rows), NOT a framework PopupMenu. Verified on-device.
@@ -158,7 +158,7 @@ public class MainHook implements IXposedHookLoadPackage {
             ViewParent pp = row.getParent();
             if (!(pp instanceof ViewGroup)) return;
             ViewGroup parent = (ViewGroup) pp;
-            if (hasRow(parent, MARKER) && hasRow(parent, RELAUNCH_MARKER)) return; // done already
+            if (hasRow(parent, MARKER) && hasRow(parent, RESTART_MARKER)) return; // done already
             Context ctx = parent.getContext();
             int anchorIndex = indexOfAnchor(parent, anchorTitle(ctx, processPkg));
             if (anchorIndex < 0) {
@@ -172,12 +172,12 @@ public class MainHook implements IXposedHookLoadPackage {
                         anchorIndex + 1);
                 anchorIndex++;
             }
-            if (!hasRow(parent, RELAUNCH_MARKER)) {
+            if (!hasRow(parent, RESTART_MARKER)) {
                 parent.addView(
-                        menuRow(ctx, parent, RELAUNCH_TITLE, RELAUNCH_MARKER, MainHook::onRelaunch),
+                        menuRow(ctx, parent, RESTART_TITLE, RESTART_MARKER, MainHook::onRestart),
                         anchorIndex + 1);
             }
-            XposedBridge.log(TAG + ": Force stop and Relaunch inserted below App info");
+            XposedBridge.log(TAG + ": Force stop and Restart inserted below App info");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": insert failed: " + t);
         }
@@ -226,15 +226,15 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     /** Stops the task's process, then starts it again, so the app comes back cold. */
-    private static void onRelaunch(View v) {
+    private static void onRestart(View v) {
         String pkg = menuTarget(v);
         if (pkg == null) return;
         Context ctx = v.getContext();
         dismissMenuPopup();
-        new Thread(() -> relaunchPkg(ctx, pkg), "Relaunch").start();
+        new Thread(() -> restartPkg(ctx, pkg), "Restart").start();
     }
 
-    private static void relaunchPkg(Context ctx, String pkg) {
+    private static void restartPkg(Context ctx, String pkg) {
         forceStopPkg(ctx, pkg);
         final Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
         if (launch == null) {
@@ -246,9 +246,9 @@ public class MainHook implements IXposedHookLoadPackage {
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
                 ctx.startActivity(launch);
-                XposedBridge.log(TAG + ": relaunched " + pkg);
+                XposedBridge.log(TAG + ": restarted " + pkg);
             } catch (Throwable t) {
-                XposedBridge.log(TAG + ": relaunch failed: " + t);
+                XposedBridge.log(TAG + ": restart failed: " + t);
             }
         });
     }
