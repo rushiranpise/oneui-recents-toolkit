@@ -3,6 +3,9 @@ package io.github.ndevlabs.fkf;
 import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -29,6 +32,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String TAG = "ForceKillFocused";
     private static final String TITLE = "Force stop";
     private static final String MARKER = "forcestop_item";
+    private static final String RELAUNCH_TITLE = "Relaunch";
+    private static final String RELAUNCH_MARKER = "relaunch_item";
+
+    /** Tags that belong to this module's own rows, which must never be read as a package name. */
+    private static final Set<String> MARKERS = Set.of(MARKER, RELAUNCH_MARKER);
 
     // OneUI's task menu is a custom DataBinding view (task_menu_layout with
     // task_menu_item_layout rows), NOT a framework PopupMenu. Verified on-device.
@@ -150,42 +158,99 @@ public class MainHook implements IXposedHookLoadPackage {
             ViewParent pp = row.getParent();
             if (!(pp instanceof ViewGroup)) return;
             ViewGroup parent = (ViewGroup) pp;
-            for (int i = 0; i < parent.getChildCount(); i++) {
-                if (MARKER.equals(parent.getChildAt(i).getTag())) return; // done already
-            }
+            if (hasRow(parent, MARKER) && hasRow(parent, RELAUNCH_MARKER)) return; // done already
             Context ctx = parent.getContext();
             int anchorIndex = indexOfAnchor(parent, anchorTitle(ctx, processPkg));
             if (anchorIndex < 0) {
                 XposedBridge.log(TAG + ": app info row not found, skipping");
                 return;
             }
-            View fk = LayoutInflater.from(ctx).inflate(sItemLayoutId, parent, false);
-            TextView tv = findTextView(fk);
-            if (tv != null) tv.setText(TITLE);
-            fk.setTag(MARKER);
-            fk.setOnClickListener(v -> {
-                Context c = v.getContext();
-                String pkg = pkgFromChain(v);
-                if (pkg == null && System.currentTimeMillis() - sMenuTaskTime < 60000) {
-                    pkg = sMenuTaskPkg;
-                }
-                if (pkg == null) pkg = topRecentPkg(c);
-                if (pkg == null) {
-                    return;
-                }
-                final String target = pkg;
-                final Context fctx = c;
-                dismissMenuPopup();
-                // The app is stopped in the background so the menu closes straight away. The
-                // recents card is deliberately left alone: the task stays in recents, only its
-                // process is stopped, so the carousel keeps its layout and never gets stuck.
-                new Thread(() -> forceStopPkg(fctx, target), "ForceStop").start();
-            });
-            parent.addView(fk, anchorIndex + 1);
-            XposedBridge.log(TAG + ": Force stop inserted below App info");
+
+            if (!hasRow(parent, MARKER)) {
+                parent.addView(
+                        menuRow(ctx, parent, TITLE, MARKER, MainHook::onForceStop),
+                        anchorIndex + 1);
+                anchorIndex++;
+            }
+            if (!hasRow(parent, RELAUNCH_MARKER)) {
+                parent.addView(
+                        menuRow(ctx, parent, RELAUNCH_TITLE, RELAUNCH_MARKER, MainHook::onRelaunch),
+                        anchorIndex + 1);
+            }
+            XposedBridge.log(TAG + ": Force stop and Relaunch inserted below App info");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": insert failed: " + t);
         }
+    }
+
+    /** Whether the menu already carries a row this module added. */
+    private static boolean hasRow(ViewGroup parent, String tag) {
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            if (tag.equals(parent.getChildAt(i).getTag())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * One row of this module's own, built from the launcher's row layout so it matches the rows
+     * around it, then named and given its action here.
+     */
+    private static View menuRow(
+            Context ctx, ViewGroup parent, String title, String tag, View.OnClickListener action) {
+        View row = LayoutInflater.from(ctx).inflate(sItemLayoutId, parent, false);
+        TextView tv = findTextView(row);
+        if (tv != null) tv.setText(title);
+        row.setTag(tag);
+        row.setOnClickListener(action);
+        return row;
+    }
+
+    /** The task's package: the menu's recorded task first, then the view chain, then recents. */
+    private static String menuTarget(View v) {
+        Context c = v.getContext();
+        String pkg = pkgFromChain(v);
+        if (pkg == null && System.currentTimeMillis() - sMenuTaskTime < 60000) {
+            pkg = sMenuTaskPkg;
+        }
+        if (pkg == null) pkg = topRecentPkg(c);
+        return pkg;
+    }
+
+    /** Stops the task's process. The menu closes straight away and the recents card is left alone. */
+    private static void onForceStop(View v) {
+        String pkg = menuTarget(v);
+        if (pkg == null) return;
+        Context ctx = v.getContext();
+        dismissMenuPopup();
+        new Thread(() -> forceStopPkg(ctx, pkg), "ForceStop").start();
+    }
+
+    /** Stops the task's process, then starts it again, so the app comes back cold. */
+    private static void onRelaunch(View v) {
+        String pkg = menuTarget(v);
+        if (pkg == null) return;
+        Context ctx = v.getContext();
+        dismissMenuPopup();
+        new Thread(() -> relaunchPkg(ctx, pkg), "Relaunch").start();
+    }
+
+    private static void relaunchPkg(Context ctx, String pkg) {
+        forceStopPkg(ctx, pkg);
+        final Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+        if (launch == null) {
+            XposedBridge.log(TAG + ": no launch intent for " + pkg);
+            return;
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        // Starting an activity belongs on the main thread, which is also where the menu just was.
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                ctx.startActivity(launch);
+                XposedBridge.log(TAG + ": relaunched " + pkg);
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + ": relaunch failed: " + t);
+            }
+        });
     }
 
     /** Nearest TaskView ancestor (the recents card), or null. */
@@ -321,10 +386,10 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static String pkgFrom(Object o) {
         if (o == null) return null;
-        // The row carries this module's own marker as its tag, so it must not be read as a package.
+        // A row carries this module's own marker as its tag, so it must not be read as a package.
         if (o instanceof String) {
             String s = (String) o;
-            return MARKER.equals(s) ? null : s;
+            return MARKERS.contains(s) ? null : s;
         }
         if (o instanceof ComponentName) return ((ComponentName) o).getPackageName();
         try {
