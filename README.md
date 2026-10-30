@@ -1,6 +1,6 @@
 # ForceKill Focused
 
-LSPosed module for **OneUI 8.5** that adds a **Force kill** item to the per-task popup menu in Recents, directly below **Keep open**.
+LSPosed module for **OneUI 8.5 and OneUI 9** that adds a **Force kill** item to the per-task popup menu in Recents, directly below **App info**.
 
 Tapping it swipe-dismisses the task card, closes the menu, force-stops that one app (the tapped task only), and removes its Recents card.
 
@@ -26,7 +26,8 @@ There are no separate Magisk/KernelSU builds. It's a plain LSPosed APK hooking `
 Everything lives in one file, `MainHook.java`.
 
 - **Menu injection:** OneUI's task menu is a custom DataBinding view (`task_menu_layout` containing `task_menu_item_layout` rows), not a framework `PopupMenu`. This was verified via on-device resource and stack-trace inspection.
-- **Hook point:** `LayoutInflater.inflate()` is hooked. Each `task_menu_item_layout` inflation schedules a `post()` that clones the row below the Keep open row, which is matched by its `task_option_dedicated_app` string. A marker tag ensures only one copy is added.
+- **Hook point:** `LayoutInflater.inflate()` is hooked. Each `task_menu_item_layout` inflation schedules a `post()` that clones the row below the App info row, which is matched by its `task_option_app_info` string. A marker tag ensures only one copy is added.
+- **Anchor row:** App info is used rather than the pin row because it is present for every task and its title never changes. OneUI 9 renamed the old Keep open row to Pin to Recents (`task_option_pin_to_recents`), which is why the previous anchor stopped matching.
 - **Target resolution**, in order:
   1. The tapped card's `TaskView.getTaskPackageName()` (exact)
   2. The view-tag chain (`TaskIconView` args)

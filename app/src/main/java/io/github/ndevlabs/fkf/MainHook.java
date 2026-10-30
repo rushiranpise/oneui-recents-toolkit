@@ -154,13 +154,13 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                         if (sItemLayoutId == 0 || ((int) param.args[0]) != sItemLayoutId) return;
                         // ponytail: post() runs after the synchronous menu build, so all
-                        // rows (incl. Keep open with bound titles) are attached by then.
-                        row.post(() -> insertBelowKeepOpen(row, processPkg));
+                        // rows (incl. App info with bound titles) are attached by then.
+                        row.post(() -> insertBelowAnchor(row, processPkg));
                     }
                 });
     }
 
-    private static void insertBelowKeepOpen(View row, String processPkg) {
+    private static void insertBelowAnchor(View row, String processPkg) {
         try {
             ViewParent pp = row.getParent();
             if (!(pp instanceof ViewGroup)) return;
@@ -169,9 +169,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (MARKER.equals(parent.getChildAt(i).getTag())) return; // done already
             }
             Context ctx = parent.getContext();
-            int keepIndex = indexOfKeepOpen(parent, keepOpenTitle(ctx, processPkg));
-            if (keepIndex < 0) {
-                XposedBridge.log(TAG + ": keep-open row not found, skipping");
+            int anchorIndex = indexOfAnchor(parent, anchorTitle(ctx, processPkg));
+            if (anchorIndex < 0) {
+                XposedBridge.log(TAG + ": app info row not found, skipping");
                 return;
             }
             View fk = LayoutInflater.from(ctx).inflate(sItemLayoutId, parent, false);
@@ -225,8 +225,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     new Thread(finish, "ForceKillFin").start();
                 }
             });
-            parent.addView(fk, keepIndex + 1);
-            XposedBridge.log(TAG + ": Force Kill inserted below Keep open");
+            parent.addView(fk, anchorIndex + 1);
+            XposedBridge.log(TAG + ": Force Kill inserted below App info");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": insert failed: " + t);
         }
@@ -304,21 +304,27 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable ignored) {}
     }
 
-    private static int indexOfKeepOpen(ViewGroup parent, String keepTitle) {
+    /**
+     * Index of the menu row this module sits under, which is the App info row.
+     *
+     * App info is the anchor rather than the pin row: it is in the menu for every task and its
+     * title never flips, while the pin row reads "Unpin from Recents" once a task is pinned.
+     */
+    private static int indexOfAnchor(ViewGroup parent, String anchorTitle) {
         for (int i = 0; i < parent.getChildCount(); i++) {
             TextView tv = findTextView(parent.getChildAt(i));
             if (tv == null || tv.getText() == null) continue;
             String t = tv.getText().toString();
-            if (keepTitle != null ? t.equals(keepTitle)
-                    : t.toLowerCase().contains("keep open")) return i;
+            if (anchorTitle != null ? t.equals(anchorTitle)
+                    : t.toLowerCase().contains("app info")) return i;
         }
         return -1;
     }
 
-    private static String keepOpenTitle(Context ctx, String processPkg) {
+    private static String anchorTitle(Context ctx, String processPkg) {
         try {
             int id = ctx.getResources().getIdentifier(
-                    "task_option_dedicated_app", "string", processPkg);
+                    "task_option_app_info", "string", processPkg);
             if (id != 0) return ctx.getResources().getString(id);
         } catch (Throwable ignored) {}
         return null;
@@ -371,7 +377,11 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static String pkgFrom(Object o) {
         if (o == null) return null;
-        if (o instanceof String) return (String) o;
+        // The row carries this module's own marker as its tag, so it must not be read as a package.
+        if (o instanceof String) {
+            String s = (String) o;
+            return MARKER.equals(s) ? null : s;
+        }
         if (o instanceof ComponentName) return ((ComponentName) o).getPackageName();
         try {
             Object v = XposedHelpers.getObjectField(o, "packageName");
