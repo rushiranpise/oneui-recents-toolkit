@@ -169,6 +169,11 @@ public class MainHook implements IXposedHookLoadPackage {
                         row.post(() -> insertBelowAnchor(row, processPkg));
                     }
                 });
+
+        if ("com.sec.android.app.launcher".equals(processPkg)
+                || "com.android.systemui".equals(processPkg)) {
+            MemoryCardHook.install(lpparam);
+        }
     }
 
     private static void insertBelowAnchor(View row, String processPkg) {
