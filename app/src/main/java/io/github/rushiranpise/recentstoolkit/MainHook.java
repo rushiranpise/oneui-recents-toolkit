@@ -174,6 +174,11 @@ public class MainHook implements IXposedHookLoadPackage {
                 || "com.android.systemui".equals(processPkg)) {
             MemoryCardHook.install(lpparam);
         }
+
+        if ("com.android.systemui".equals(processPkg)) {
+            ChargingInfoHook.install(lpparam);
+            KeyguardChargingHook.install(lpparam);
+        }
     }
 
     private static void insertBelowAnchor(View row, String processPkg) {
